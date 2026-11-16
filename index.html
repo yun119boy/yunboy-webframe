@@ -529,7 +529,7 @@
       loadCurrent();
     }
 
-    async function fetchViaProxy(url) {
+    async function fetchViaProxy(url, renderedOnly) {
       const targets = [];
       if (MY_PROXY) {
         targets.push({ name: "พร็อกซีของคุณ", url: MY_PROXY + encodeURIComponent(url) });
@@ -540,8 +540,11 @@
       targets.push({ name: "corsproxy", url: "https://corsproxy.io/?url=" + encodeURIComponent(url) });
 
       const reasons = [];
+      const list = renderedOnly
+        ? targets.filter(function (t) { return t.name === "jina"; })
+        : targets;
 
-      for (const target of targets) {
+      for (const target of list) {
         const ctrl = new AbortController();
         const timer = setTimeout(function () { ctrl.abort(); }, 15000);
         try {
@@ -569,7 +572,7 @@
       throw failure;
     }
 
-    function prepareHtml(html, url) {
+    function prepareHtml(html, url, forceStrip) {
       const doc = new DOMParser().parseFromString(html, "text/html");
 
       doc.querySelectorAll('meta[http-equiv="Content-Security-Policy" i], meta[http-equiv="refresh" i], base')
@@ -582,7 +585,7 @@
         el.removeAttribute("loading");
       });
 
-      if (stripToggle.checked) {
+      if (forceStrip || stripToggle.checked) {
         doc.querySelectorAll("script, link[rel=modulepreload], link[rel=preload][as=script]")
           .forEach(function (node) { node.remove(); });
 
@@ -594,10 +597,13 @@
 
         // เนื้อหาใน <noscript> คือเวอร์ชันที่ใช้ได้โดยไม่ต้องมีสคริปต์
         doc.querySelectorAll("noscript").forEach(function (node) {
-          const holder = doc.createElement("div");
-          holder.innerHTML = node.textContent;
-          node.replaceWith(...holder.childNodes);
+          node.replaceWith(...Array.from(node.childNodes));
         });
+
+        // เว็บที่ซ่อนหน้าไว้จนกว่าสคริปต์จะทำงาน (preloader) ให้แสดงเลย
+        const reveal = doc.createElement("style");
+        reveal.textContent = "html,body{opacity:1!important;visibility:visible!important}";
+        doc.head.appendChild(reveal);
       }
 
       const base = doc.createElement("base");
@@ -642,6 +648,7 @@
     }
 
     function directLoad(target) {
+      frame.dataset.inspect = "";
       frame.removeAttribute("srcdoc");
       frame.setAttribute("sandbox", DIRECT_SANDBOX);
       frame.src = "about:blank";
@@ -650,7 +657,7 @@
 
     let loadToken = 0;
 
-    async function loadCurrent() {
+    async function loadCurrent(forceRendered) {
       const token = ++loadToken;
       const url = activeUrl;
 
@@ -663,12 +670,16 @@
 
       if (proxyToggle.checked) {
         try {
-          const html = await fetchViaProxy(url);
+          const html = await fetchViaProxy(url, forceRendered);
           if (token !== loadToken) return;
           errorMessage.hidden = true;
-          frame.setAttribute("sandbox", PROXY_SANDBOX);
+          // สคริปต์ของเว็บถูกตัดออกแล้ว จึงเปิด same-origin ให้แอปตรวจได้ว่าหน้าว่างหรือไม่
+          const strip = Boolean(forceRendered) || stripToggle.checked;
+          frame.dataset.inspect = strip ? "1" : "";
+          frame.dataset.rendered = forceRendered ? "1" : "";
+          frame.setAttribute("sandbox", strip ? PROXY_SANDBOX + " allow-same-origin" : PROXY_SANDBOX);
           frame.removeAttribute("src");
-          frame.srcdoc = prepareHtml(html, url);
+          frame.srcdoc = prepareHtml(html, url, strip);
           return;
         } catch (err) {
           if (token !== loadToken) return;
@@ -713,9 +724,42 @@
       if (!activeUrl || frame.getAttribute("src") === "about:blank") return;
       clearTimeout(slowTimer);
       loadingState.hidden = true;
+      const viaProxy = frame.hasAttribute("srcdoc");
       statusText.textContent =
-        new URL(activeUrl).host + (frame.hasAttribute("srcdoc") ? " (ผ่านพร็อกซี)" : "");
+        new URL(activeUrl).host +
+        (viaProxy ? (frame.dataset.rendered === "1" ? " (เรนเดอร์ผ่านพร็อกซี)" : " (ผ่านพร็อกซี)") : "");
+
+      if (viaProxy && frame.dataset.inspect === "1") {
+        setTimeout(handleBlankPage, 700);
+      }
     });
+
+    function pageLooksBlank() {
+      try {
+        const doc = frame.contentDocument;
+        if (!doc || !doc.body) return false;
+        if ((doc.body.innerText || "").trim().length > 40) return false;
+        return !doc.querySelector("img, picture, video, canvas");
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function handleBlankPage() {
+      if (!pageLooksBlank()) return;
+
+      if (frame.dataset.rendered !== "1") {
+        // เว็บแบบ SPA: ขอเวอร์ชันที่เรนเดอร์สคริปต์เสร็จแล้วจากพร็อกซีแทน
+        startLoading("หน้าว่าง กำลังลองโหมดเรนเดอร์…");
+        loadCurrent(true);
+        return;
+      }
+
+      errorMessage.textContent =
+        "ดึงหน้ามาได้แต่ไม่มีเนื้อหาให้แสดง เว็บนี้ต้องใช้สคริปต์ของตัวเองวาดหน้า จึงแสดงในกรอบไม่ได้ " +
+        "กด “เปิดในแท็บใหม่” แทน";
+      errorMessage.hidden = false;
+    }
 
     reloadButton.addEventListener("click", function () {
       if (!activeUrl) return;

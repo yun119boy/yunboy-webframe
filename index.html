@@ -382,6 +382,8 @@
             title="เว็บไซต์ที่เปิดในแอป"
             sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
             referrerpolicy="strict-origin-when-cross-origin"
+            allow="fullscreen; autoplay; picture-in-picture; encrypted-media; clipboard-write"
+            allowfullscreen
             hidden
           ></iframe>
         </div>
@@ -422,7 +424,7 @@
     // ถ้าว่างไว้ จะใช้พร็อกซีสาธารณะแทน
     const MY_PROXY = "";
     const DIRECT_SANDBOX =
-      "allow-forms allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox";
+      "allow-forms allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation";
     const PROXY_SANDBOX =
       "allow-forms allow-scripts allow-popups allow-popups-to-escape-sandbox";
 
@@ -549,6 +551,10 @@
             continue;
           }
           const text = await res.text();
+          if (/unusual traffic|are you a robot|verify you are human|Just a moment\.\.\.|Attention Required|captcha/i.test(text.slice(0, 20000))) {
+            reasons.push(target.name + " ถูกเว็บปลายทางบล็อก IP");
+            continue;
+          }
           if (text.length > 200 && /<\s*(html|head|body|!doctype)/i.test(text)) return text;
           reasons.push(target.name + " ตอบกลับไม่ใช่หน้าเว็บ");
         } catch (err) {
@@ -605,11 +611,55 @@
       return "<!doctype html>" + doc.documentElement.outerHTML;
     }
 
+    // เว็บวิดีโอที่ปิดการแสดงหน้าปกติ แต่มีหน้า embed สำหรับฝังโดยเฉพาะ
+    function toEmbed(href) {
+      let u;
+      try { u = new URL(href); } catch (_) { return ""; }
+      const host = u.hostname.replace(/^(www|m|music)\./, "");
+      let id = "";
+
+      if (host === "youtu.be") {
+        id = u.pathname.slice(1).split("/")[0];
+      } else if (host === "youtube.com") {
+        if (u.pathname === "/watch") {
+          id = u.searchParams.get("v") || "";
+        } else {
+          const m = u.pathname.match(/^\/(shorts|live|embed)\/([\w-]{6,})/);
+          if (m) id = m[2];
+        }
+        const list = u.searchParams.get("list");
+        if (!id && u.pathname === "/playlist" && list) {
+          return "https://www.youtube-nocookie.com/embed/videoseries?list=" + encodeURIComponent(list);
+        }
+      } else if (host === "vimeo.com") {
+        const m = u.pathname.match(/^\/(\d+)/);
+        return m ? "https://player.vimeo.com/video/" + m[1] : "";
+      }
+
+      if (!/^[\w-]{6,}$/.test(id)) return "";
+      const start = parseInt(u.searchParams.get("t") || u.searchParams.get("start") || "", 10);
+      return "https://www.youtube-nocookie.com/embed/" + id + (start > 0 ? "?start=" + start : "");
+    }
+
+    function directLoad(target) {
+      frame.removeAttribute("srcdoc");
+      frame.setAttribute("sandbox", DIRECT_SANDBOX);
+      frame.src = "about:blank";
+      frame.src = target;
+    }
+
     let loadToken = 0;
 
     async function loadCurrent() {
       const token = ++loadToken;
       const url = activeUrl;
+
+      const embed = toEmbed(url);
+      if (embed) {
+        errorMessage.hidden = true;
+        directLoad(embed);
+        return;
+      }
 
       if (proxyToggle.checked) {
         try {
@@ -631,10 +681,7 @@
         }
       }
 
-      frame.removeAttribute("srcdoc");
-      frame.setAttribute("sandbox", DIRECT_SANDBOX);
-      frame.src = "about:blank";
-      frame.src = url;
+      directLoad(url);
     }
 
     window.addEventListener("message", function (event) {

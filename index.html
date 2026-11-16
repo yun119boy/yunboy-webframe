@@ -282,7 +282,7 @@
       font-size: 12px;
     }
 
-    .proxy-row { padding: 10px 18px 0; border-bottom: 0; }
+    .proxy-row { display: flex; flex-wrap: wrap; gap: 6px 20px; padding: 10px 18px 0; }
     .proxy-toggle {
       display: inline-flex;
       align-items: center;
@@ -350,6 +350,10 @@
             <input type="checkbox" id="use-proxy" checked>
             <span>ใช้พร็อกซี (แก้ปัญหาเว็บที่ขึ้นหน้าขาว)</span>
           </label>
+          <label class="proxy-toggle">
+            <input type="checkbox" id="strip-scripts" checked>
+            <span>ปิดสคริปต์ของเว็บ (แนะนำ ลดโอกาสหน้าขาว)</span>
+          </label>
         </div>
 
         <p id="error" class="error" role="alert" hidden></p>
@@ -412,6 +416,7 @@
     const reloadButton = document.getElementById("reload");
     const externalLink = document.getElementById("external");
     const proxyToggle = document.getElementById("use-proxy");
+    const stripToggle = document.getElementById("strip-scripts");
 
     // ใส่ที่อยู่พร็อกซีของคุณเองได้ เช่น Cloudflare Worker: "https://xxx.workers.dev/?url="
     // ถ้าว่างไว้ จะใช้พร็อกซีสาธารณะแทน
@@ -523,26 +528,39 @@
     }
 
     async function fetchViaProxy(url) {
-      const makers = [];
-      if (MY_PROXY) makers.push(function (u) { return MY_PROXY + encodeURIComponent(u); });
-      makers.push(function (u) { return "https://api.allorigins.win/raw?url=" + encodeURIComponent(u); });
-      makers.push(function (u) { return "https://corsproxy.io/?url=" + encodeURIComponent(u); });
+      const targets = [];
+      if (MY_PROXY) {
+        targets.push({ name: "พร็อกซีของคุณ", url: MY_PROXY + encodeURIComponent(url) });
+      }
+      targets.push({ name: "allorigins", url: "https://api.allorigins.win/raw?url=" + encodeURIComponent(url) });
+      targets.push({ name: "codetabs", url: "https://api.codetabs.com/v1/proxy/?quest=" + encodeURIComponent(url) });
+      targets.push({ name: "jina", url: "https://r.jina.ai/" + url, headers: { "X-Return-Format": "html" } });
+      targets.push({ name: "corsproxy", url: "https://corsproxy.io/?url=" + encodeURIComponent(url) });
 
-      for (const make of makers) {
+      const reasons = [];
+
+      for (const target of targets) {
         const ctrl = new AbortController();
-        const timer = setTimeout(function () { ctrl.abort(); }, 12000);
+        const timer = setTimeout(function () { ctrl.abort(); }, 15000);
         try {
-          const res = await fetch(make(url), { signal: ctrl.signal });
-          if (!res.ok) continue;
+          const res = await fetch(target.url, { signal: ctrl.signal, headers: target.headers });
+          if (!res.ok) {
+            reasons.push(target.name + " " + res.status);
+            continue;
+          }
           const text = await res.text();
-          if (/<\s*(html|head|body|!doctype)/i.test(text)) return text;
-        } catch (_) {
-          // ลองตัวถัดไป
+          if (text.length > 200 && /<\s*(html|head|body|!doctype)/i.test(text)) return text;
+          reasons.push(target.name + " ตอบกลับไม่ใช่หน้าเว็บ");
+        } catch (err) {
+          reasons.push(target.name + (err && err.name === "AbortError" ? " หมดเวลา" : " เชื่อมต่อไม่ได้"));
         } finally {
           clearTimeout(timer);
         }
       }
-      throw new Error("proxy failed");
+
+      const failure = new Error("proxy failed");
+      failure.reasons = reasons;
+      throw failure;
     }
 
     function prepareHtml(html, url) {
@@ -550,6 +568,31 @@
 
       doc.querySelectorAll('meta[http-equiv="Content-Security-Policy" i], meta[http-equiv="refresh" i], base')
         .forEach(function (node) { node.remove(); });
+
+      // รูปที่โหลดแบบ lazy ให้แสดงทันที (เมื่อไม่มีสคริปต์ช่วยโหลด)
+      doc.querySelectorAll("img[data-src], img[data-srcset], source[data-srcset]").forEach(function (el) {
+        if (el.dataset.src) el.setAttribute("src", el.dataset.src);
+        if (el.dataset.srcset) el.setAttribute("srcset", el.dataset.srcset);
+        el.removeAttribute("loading");
+      });
+
+      if (stripToggle.checked) {
+        doc.querySelectorAll("script, link[rel=modulepreload], link[rel=preload][as=script]")
+          .forEach(function (node) { node.remove(); });
+
+        doc.querySelectorAll("*").forEach(function (el) {
+          Array.from(el.attributes).forEach(function (attr) {
+            if (/^on/i.test(attr.name)) el.removeAttribute(attr.name);
+          });
+        });
+
+        // เนื้อหาใน <noscript> คือเวอร์ชันที่ใช้ได้โดยไม่ต้องมีสคริปต์
+        doc.querySelectorAll("noscript").forEach(function (node) {
+          const holder = doc.createElement("div");
+          holder.innerHTML = node.textContent;
+          node.replaceWith(...holder.childNodes);
+        });
+      }
 
       const base = doc.createElement("base");
       base.href = url;
@@ -572,12 +615,18 @@
         try {
           const html = await fetchViaProxy(url);
           if (token !== loadToken) return;
+          errorMessage.hidden = true;
           frame.setAttribute("sandbox", PROXY_SANDBOX);
           frame.removeAttribute("src");
           frame.srcdoc = prepareHtml(html, url);
           return;
-        } catch (_) {
+        } catch (err) {
           if (token !== loadToken) return;
+          const why = err && err.reasons ? err.reasons.join(", ") : "ไม่ทราบสาเหตุ";
+          errorMessage.textContent =
+            "ดึงหน้าเว็บผ่านพร็อกซีไม่ได้ (" + why + ") จึงลองเปิดตรง ๆ ซึ่งเว็บที่บล็อก iframe จะขึ้นหน้าขาว " +
+            "กด “เปิดในแท็บใหม่” หรือตั้งพร็อกซีของคุณเองในตัวแปร MY_PROXY";
+          errorMessage.hidden = false;
           statusText.textContent = "พร็อกซีใช้ไม่ได้ กำลังลองเปิดตรง ๆ…";
         }
       }

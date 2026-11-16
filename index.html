@@ -684,6 +684,19 @@
         } catch (err) {
           if (token !== loadToken) return;
           const why = err && err.reasons ? err.reasons.join(", ") : "ไม่ทราบสาเหตุ";
+
+          if (forceRendered) {
+            // หน้าที่ดึงมาก่อนหน้าว่างอยู่แล้ว ไม่ต้องสลับไปเปิดตรง ๆ ซึ่งจะขาวเหมือนกัน
+            clearTimeout(slowTimer);
+            loadingState.hidden = true;
+            statusText.textContent = new URL(url).host;
+            errorMessage.textContent =
+              "เว็บนี้ไม่มีเนื้อหาใน HTML และพร็อกซีเรนเดอร์ให้ไม่ได้ (" + why + ") " +
+              "เว็บนี้บล็อกพร็อกซี จึงแสดงในกรอบนี้ไม่ได้ กด “เปิดในแท็บใหม่” แทน";
+            errorMessage.hidden = false;
+            return;
+          }
+
           errorMessage.textContent =
             "ดึงหน้าเว็บผ่านพร็อกซีไม่ได้ (" + why + ") จึงลองเปิดตรง ๆ ซึ่งเว็บที่บล็อก iframe จะขึ้นหน้าขาว " +
             "กด “เปิดในแท็บใหม่” หรือตั้งพร็อกซีของคุณเองในตัวแปร MY_PROXY";

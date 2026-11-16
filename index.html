@@ -282,6 +282,18 @@
       font-size: 12px;
     }
 
+    .proxy-row { padding: 10px 18px 0; border-bottom: 0; }
+    .proxy-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: #44564f;
+      font-size: 13px;
+      line-height: 1.6;
+      cursor: pointer;
+    }
+    .proxy-toggle input { width: 18px; height: 18px; margin: 0; padding: 0; accent-color: #356f5d; }
+
     [hidden] { display: none !important; }
 
     @media (max-width: 640px) {
@@ -333,6 +345,13 @@
           </form>
         </div>
 
+        <div class="proxy-row">
+          <label class="proxy-toggle">
+            <input type="checkbox" id="use-proxy" checked>
+            <span>ใช้พร็อกซี (แก้ปัญหาเว็บที่ขึ้นหน้าขาว)</span>
+          </label>
+        </div>
+
         <p id="error" class="error" role="alert" hidden></p>
 
         <div class="status-row">
@@ -367,10 +386,10 @@
       <aside class="notice">
         <span aria-hidden="true">ⓘ</span>
         <p>
-          บางเว็บไซต์บล็อกการแสดงผลใน iframe จึงเปิดในกรอบนี้ไม่ได้
-          และแอปนี้ไม่มีวิธีข้ามข้อจำกัดนั้น หากหน้าเว็บไม่แสดง
-          ให้กด "เปิดในแท็บใหม่" แทน เว็บไซต์ที่ใช้ http
-          อาจถูกเบราว์เซอร์บล็อกเมื่อแอปทำงานผ่าน https
+          เมื่อเปิดโหมดพร็อกซี แอปจะดึงหน้าเว็บผ่านบริการตัวกลางสาธารณะ
+          (ที่อยู่เว็บที่เปิดจะผ่านบริการนั้น อย่าใช้กับหน้าที่ต้องล็อกอินหรือมีข้อมูลส่วนตัว)
+          เว็บที่เน้นสคริปต์หนัก ๆ หรือต้องล็อกอินอาจแสดงไม่ครบ
+          ถ้าไม่ได้ให้กด "เปิดในแท็บใหม่" แทน
         </p>
       </aside>
     </main>
@@ -392,6 +411,44 @@
     const statusText = document.getElementById("status");
     const reloadButton = document.getElementById("reload");
     const externalLink = document.getElementById("external");
+    const proxyToggle = document.getElementById("use-proxy");
+
+    // ใส่ที่อยู่พร็อกซีของคุณเองได้ เช่น Cloudflare Worker: "https://xxx.workers.dev/?url="
+    // ถ้าว่างไว้ จะใช้พร็อกซีสาธารณะแทน
+    const MY_PROXY = "";
+    const DIRECT_SANDBOX =
+      "allow-forms allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox";
+    const PROXY_SANDBOX =
+      "allow-forms allow-scripts allow-popups allow-popups-to-escape-sandbox";
+
+    const BRIDGE_SCRIPT = `
+      document.addEventListener("click", function (e) {
+        var a = e.target.closest && e.target.closest("a[href]");
+        if (!a) return;
+        var raw = a.getAttribute("href") || "";
+        if (raw.charAt(0) === "#") {
+          e.preventDefault();
+          var id = decodeURIComponent(raw.slice(1));
+          var t = id && (document.getElementById(id) || document.getElementsByName(id)[0]);
+          if (t) t.scrollIntoView();
+          return;
+        }
+        if (!/^https?:/i.test(a.href) || a.target === "_blank") return;
+        e.preventDefault();
+        parent.postMessage({ webframe: "nav", href: a.href }, "*");
+      }, true);
+      document.addEventListener("submit", function (e) {
+        var f = e.target;
+        e.preventDefault();
+        if ((f.method || "get").toLowerCase() !== "get") return;
+        var u = new URL(f.getAttribute("action") || "", document.baseURI);
+        u.search = "";
+        new FormData(f).forEach(function (v, k) {
+          if (typeof v === "string") u.searchParams.append(k, v);
+        });
+        parent.postMessage({ webframe: "nav", href: u.href }, "*");
+      }, true);
+    `;
 
     const SLOW_MS = 8000;
     let activeUrl = "";
@@ -462,10 +519,85 @@
       externalLink.hidden = false;
       startLoading("กำลังเปิด " + url.host);
 
-      // ให้เบราว์เซอร์โหลดใหม่ทุกครั้ง แม้เป็นที่อยู่เดิม
-      frame.src = "about:blank";
-      frame.src = activeUrl;
+      loadCurrent();
     }
+
+    async function fetchViaProxy(url) {
+      const makers = [];
+      if (MY_PROXY) makers.push(function (u) { return MY_PROXY + encodeURIComponent(u); });
+      makers.push(function (u) { return "https://api.allorigins.win/raw?url=" + encodeURIComponent(u); });
+      makers.push(function (u) { return "https://corsproxy.io/?url=" + encodeURIComponent(u); });
+
+      for (const make of makers) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(function () { ctrl.abort(); }, 12000);
+        try {
+          const res = await fetch(make(url), { signal: ctrl.signal });
+          if (!res.ok) continue;
+          const text = await res.text();
+          if (/<\s*(html|head|body|!doctype)/i.test(text)) return text;
+        } catch (_) {
+          // ลองตัวถัดไป
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      throw new Error("proxy failed");
+    }
+
+    function prepareHtml(html, url) {
+      const doc = new DOMParser().parseFromString(html, "text/html");
+
+      doc.querySelectorAll('meta[http-equiv="Content-Security-Policy" i], meta[http-equiv="refresh" i], base')
+        .forEach(function (node) { node.remove(); });
+
+      const base = doc.createElement("base");
+      base.href = url;
+      doc.head.insertBefore(base, doc.head.firstChild);
+
+      const bridge = doc.createElement("script");
+      bridge.textContent = BRIDGE_SCRIPT;
+      doc.head.appendChild(bridge);
+
+      return "<!doctype html>" + doc.documentElement.outerHTML;
+    }
+
+    let loadToken = 0;
+
+    async function loadCurrent() {
+      const token = ++loadToken;
+      const url = activeUrl;
+
+      if (proxyToggle.checked) {
+        try {
+          const html = await fetchViaProxy(url);
+          if (token !== loadToken) return;
+          frame.setAttribute("sandbox", PROXY_SANDBOX);
+          frame.removeAttribute("src");
+          frame.srcdoc = prepareHtml(html, url);
+          return;
+        } catch (_) {
+          if (token !== loadToken) return;
+          statusText.textContent = "พร็อกซีใช้ไม่ได้ กำลังลองเปิดตรง ๆ…";
+        }
+      }
+
+      frame.removeAttribute("srcdoc");
+      frame.setAttribute("sandbox", DIRECT_SANDBOX);
+      frame.src = "about:blank";
+      frame.src = url;
+    }
+
+    window.addEventListener("message", function (event) {
+      if (event.source !== frame.contentWindow) return;
+      const data = event.data;
+      if (!data || data.webframe !== "nav" || typeof data.href !== "string") return;
+      try {
+        openWebsite(parseAddress(data.href));
+      } catch (_) {
+        // ไม่ทำอะไรถ้าลิงก์ใช้ไม่ได้
+      }
+    });
 
     form.addEventListener("submit", function (event) {
       event.preventDefault();
@@ -485,14 +617,14 @@
       if (!activeUrl || frame.getAttribute("src") === "about:blank") return;
       clearTimeout(slowTimer);
       loadingState.hidden = true;
-      statusText.textContent = new URL(activeUrl).host;
+      statusText.textContent =
+        new URL(activeUrl).host + (frame.hasAttribute("srcdoc") ? " (ผ่านพร็อกซี)" : "");
     });
 
     reloadButton.addEventListener("click", function () {
       if (!activeUrl) return;
       startLoading("กำลังโหลดซ้ำ…");
-      frame.src = "about:blank";
-      frame.src = activeUrl;
+      loadCurrent();
     });
 
     addressInput.addEventListener("input", function () {

@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f3ec">
+  <title>Webframe — เปิดเว็บในแอป</title>
+  <meta name="description" content="เปิดเว็บไซต์ที่รองรับ iframe ภายในหน้าเดียว">
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: #23352f;
+      background: #f6f3ec;
+      font-synthesis: none;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      background:
+        radial-gradient(ellipse at 85% 0%, #e9e2c9 0, transparent 30rem),
+        #f6f3ec;
+    }
+
+    button, input { font: inherit; }
+
+    .page {
+      width: min(1380px, 100%);
+      margin: 0 auto;
+      padding: 26px clamp(16px, 4.5vw, 68px);
+    }
+
+    header, .brand, .security-note, .address-row, .status-row,
+    .notice, footer {
+      display: flex;
+      align-items: center;
+    }
+
+    header, .status-row, footer { justify-content: space-between; }
+
+    .brand {
+      gap: 11px;
+      color: inherit;
+      text-decoration: none;
+      font-weight: 800;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 38px;
+      height: 38px;
+      place-items: center;
+      border-radius: 12px;
+      background: #356f5d;
+      color: #fffaf0;
+      font-size: 20px;
+    }
+
+    .security-note {
+      gap: 8px;
+      color: #64756e;
+      font-size: 13px;
+    }
+
+    main { padding-top: clamp(48px, 8vh, 88px); }
+
+    .eyebrow {
+      margin: 0 0 14px;
+      color: #356f5d;
+      font-size: 12px;
+      letter-spacing: .12em;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(36px, 5vw, 62px);
+      line-height: 1.12;
+      letter-spacing: -.06em;
+    }
+
+    h1 span { color: #356f5d; }
+
+    .intro {
+      margin: 16px 0 32px;
+      color: #68756f;
+      line-height: 1.8;
+    }
+
+    .viewer {
+      overflow: hidden;
+      border: 1px solid #ded9cd;
+      border-radius: 18px;
+      background: #fffefa;
+      box-shadow: 0 18px 45px #23352f12;
+    }
+
+    .address-row {
+      gap: 12px;
+      padding: 16px 18px;
+      border-bottom: 1px solid #e7e2d7;
+    }
+
+    .lock {
+      flex: 0 0 auto;
+      color: #356f5d;
+      font-size: 20px;
+    }
+
+    form {
+      display: flex;
+      flex: 1;
+      min-width: 0;
+      gap: 10px;
+    }
+
+    input {
+      width: 100%;
+      min-width: 0;
+      height: 46px;
+      padding: 0 14px;
+      border: 1px solid #ded9cd;
+      border-radius: 10px;
+      outline: none;
+      background: #faf9f5;
+    }
+
+    input:focus {
+      border-color: #4d8b75;
+      box-shadow: 0 0 0 3px #356f5d20;
+    }
+
+    button {
+      border: 0;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+
+    .open-button {
+      flex: 0 0 auto;
+      min-height: 46px;
+      padding: 0 18px;
+      background: #356f5d;
+      color: white;
+      font-weight: 650;
+    }
+
+    .open-button:hover { background: #285b4b; }
+
+    .error {
+      margin: 10px 18px 0;
+      color: #a63232;
+      font-size: 13px;
+    }
+
+    .status-row {
+      min-height: 46px;
+      gap: 12px;
+      padding: 0 18px;
+      border-bottom: 1px solid #e7e2d7;
+      color: #68756f;
+      font-size: 12px;
+    }
+
+    .status {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .reload-button {
+      width: 34px;
+      height: 34px;
+      background: transparent;
+      color: #68756f;
+      font-size: 18px;
+    }
+
+    .reload-button:hover:not(:disabled) { background: #f0eee7; }
+    .reload-button:disabled { cursor: not-allowed; opacity: .4; }
+
+    .stage {
+      position: relative;
+      height: min(64vh, 760px);
+      min-height: 440px;
+      background: #f4f2ec;
+    }
+
+    iframe {
+      display: block;
+      width: 100%;
+      height: 100%;
+      min-height: 440px;
+      border: 0;
+      background: white;
+    }
+
+    .empty, .loading {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-content: center;
+      padding: 24px;
+      text-align: center;
+    }
+
+    .empty-icon {
+      display: grid;
+      width: 100px;
+      height: 100px;
+      margin: 0 auto 22px;
+      place-items: center;
+      border: 1px solid #ded9cd;
+      border-radius: 50%;
+      background: #fffefa;
+      color: #356f5d;
+      font-size: 36px;
+    }
+
+    .empty h2 { margin: 0; font-size: 18px; }
+    .empty p { color: #68756f; font-size: 13px; line-height: 1.8; }
+
+    .loading {
+      background: #f4f2ecee;
+      color: #68756f;
+      font-size: 13px;
+    }
+
+    .notice {
+      align-items: flex-start;
+      gap: 10px;
+      margin-top: 16px;
+      padding: 13px 15px;
+      border: 1px solid #e8d6a6;
+      border-radius: 11px;
+      background: #f5edda;
+      color: #574a2e;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .notice p { margin: 0; }
+
+    footer {
+      gap: 12px;
+      margin-top: 18px;
+      color: #68756f;
+      font-size: 12px;
+    }
+
+    [hidden] { display: none !important; }
+
+    @media (max-width: 640px) {
+      .page { padding: 20px 16px; }
+      main { padding-top: 48px; }
+      .security-note { font-size: 0; }
+      .address-row { align-items: flex-start; padding: 13px; }
+      .lock { margin-top: 10px; }
+      form { flex-direction: column; }
+      .open-button { width: 100%; }
+      .stage, iframe { min-height: 400px; }
+      .stage { height: 58vh; }
+      footer { font-size: 11px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <a class="brand" href="/" aria-label="Webframe หน้าแรก">
+        <span class="brand-mark" aria-hidden="true">≈</span>
+        <span>webframe</span>
+      </a>
+      <div class="security-note">ดูเว็บไซต์ในกรอบของแอป</div>
+    </header>
+
+    <main>
+      <p class="eyebrow">เปิดเว็บอย่างเรียบง่าย</p>
+      <h1>เปิดเว็บไว้ตรงนี้<br><span>แล้วไปต่อได้เลย</span></h1>
+      <p class="intro">วางที่อยู่เว็บไซต์เพื่อเปิดดูในพื้นที่เดียวกัน</p>
+
+      <section class="viewer" aria-label="พื้นที่เปิดเว็บไซต์">
+        <div class="address-row">
+          <span class="lock" aria-hidden="true">⌑</span>
+          <form id="address-form" novalidate>
+            <label for="address" hidden>ที่อยู่เว็บไซต์</label>
+            <input
+              id="address"
+              type="text"
+              inputmode="url"
+              autocomplete="url"
+              placeholder="ใส่ที่อยู่เว็บไซต์ เช่น example.com"
+              aria-describedby="error"
+            >
+            <button class="open-button" type="submit">เปิดเว็บไซต์</button>
+          </form>
+        </div>
+
+        <p id="error" class="error" role="alert" hidden></p>
+
+        <div class="status-row">
+          <span id="status" class="status">ยังไม่ได้เปิดเว็บไซต์</span>
+          <button id="reload" class="reload-button" type="button" aria-label="โหลดซ้ำ" disabled>↻</button>
+        </div>
+
+        <div class="stage">
+          <div id="empty" class="empty">
+            <div class="empty-icon" aria-hidden="true">◎</div>
+            <h2>หน้าถัดไปของคุณเริ่มที่นี่</h2>
+            <p>ใส่ที่อยู่เว็บด้านบน แล้วหน้าเว็บจะปรากฏในพื้นที่นี้</p>
+          </div>
+
+          <div id="loading" class="loading" hidden role="status">
+            กำลังเปิดเว็บไซต์…
+          </div>
+
+          <iframe
+            id="website"
+            title="เว็บไซต์ที่เปิดในแอป"
+            sandbox="allow-forms allow-scripts"
+            referrerpolicy="strict-origin-when-cross-origin"
+            hidden
+          ></iframe>
+        </div>
+      </section>
+
+      <aside class="notice">
+        <span aria-hidden="true">ⓘ</span>
+        <p>
+          บางเว็บไซต์บล็อกการแสดงผลใน iframe จึงเปิดในกรอบนี้ไม่ได้
+          และแอปนี้ไม่มีวิธีข้ามข้อจำกัดนั้น เว็บไซต์ที่ใช้ http
+          อาจถูกเบราว์เซอร์บล็อกเมื่อแอปทำงานผ่าน https
+        </p>
+      </aside>
+    </main>
+
+    <footer>
+      <span>หน้าเว็บจะแสดงภายในกรอบของแอป</span>
+      <span>ใช้งานได้กับเว็บไซต์ที่อนุญาตให้ฝัง</span>
+    </footer>
+  </div>
+
+  <script>
+    const form = document.getElementById("address-form");
+    const addressInput = document.getElementById("address");
+    const errorMessage = document.getElementById("error");
+    const frame = document.getElementById("website");
+    const emptyState = document.getElementById("empty");
+    const loadingState = document.getElementById("loading");
+    const statusText = document.getElementById("status");
+    const reloadButton = document.getElementById("reload");
+
+    let activeUrl = "";
+
+    function parseAddress(value) {
+      const text = value.trim();
+
+      if (!text) {
+        throw new Error("กรุณากรอกที่อยู่เว็บไซต์ก่อน");
+      }
+
+      let candidate = text;
+
+      if (candidate.startsWith("//")) {
+        candidate = "https:" + candidate;
+      } else if (!/^[a-z][a-z\\d+.-]*:/i.test(candidate)) {
+        candidate = "https://" + candidate;
+      }
+
+      const url = new URL(candidate);
+
+      if (url.protocol !== "http:" && url.protocol !== "https:") {
+        throw new Error("รองรับเฉพาะเว็บไซต์ที่ใช้ http:// หรือ https://");
+      }
+
+      if (!url.hostname || url.username || url.password) {
+        throw new Error("ที่อยู่เว็บไซต์ไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง");
+      }
+
+      return url;
+    }
+
+    function openWebsite(url) {
+      activeUrl = url.href;
+      addressInput.value = activeUrl;
+      errorMessage.hidden = true;
+      emptyState.hidden = true;
+      loadingState.hidden = false;
+      frame.hidden = false;
+      reloadButton.disabled = false;
+      statusText.textContent = "กำลังเปิด " + url.host;
+
+      frame.src = activeUrl;
+    }
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+
+      try {
+        const url = parseAddress(addressInput.value);
+        openWebsite(url);
+      } catch (error) {
+        errorMessage.textContent =
+          error instanceof Error ? error.message : "ไม่สามารถเปิดที่อยู่นี้ได้";
+        errorMessage.hidden = false;
+        addressInput.focus();
+      }
+    });
+
+    frame.addEventListener("load", function () {
+      if (!activeUrl) return;
+      loadingState.hidden = true;
+      statusText.textContent = new URL(activeUrl).host;
+    });
+
+    reloadButton.addEventListener("click", function () {
+      if (!activeUrl) return;
+      loadingState.hidden = false;
+      statusText.textContent = "กำลังโหลดซ้ำ…";
+      frame.src = activeUrl;
+    });
+
+    addressInput.addEventListener("input", function () {
+      errorMessage.hidden = true;
+    });
+  </script>
+</body>
+</html>
